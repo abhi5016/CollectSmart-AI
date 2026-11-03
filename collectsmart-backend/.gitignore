@@ -1,0 +1,71 @@
+########################################
+# CollectSmart AI - Git Ignore
+########################################
+
+### Java / Maven ###
+HELP.md
+target/
+*.class
+.mvn/wrapper/maven-wrapper.jar
+
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### Spring Boot ###
+application-local.properties
+
+### Environment files and secrets ###
+.env
+.env.*
+!.env.example
+
+### STS / Eclipse ###
+.apt_generated/
+.classpath
+.factorypath
+.project
+.settings/
+.springBeans
+.sts4-cache/
+
+### IntelliJ IDEA ###
+.idea/
+*.iws
+*.iml
+*.ipr
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
+
+### React / Node.js ###
+**/node_modules/
+**/dist/
+**/.vite/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+### Build outputs ###
+coverage/
+*.log
+
+### Operating System ###
+.DS_Store
+Thumbs.db
+desktop.ini
+
+### Temporary files ###
+*.tmp
+*.swp
+*.bak
