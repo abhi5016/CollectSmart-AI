@@ -11,9 +11,9 @@ const [error, setError] = useState("");
 const downloadSampleCSV = () => {
     const csvContent = [
         "loanAccountNumber,borrowerName,phoneNumber,pincode,loanAmount,overdueAmount,dueDate,daysPastDue,status",
-        "LN2001,Rahul Sharma,9876543210,560001,100000,15000,2026-10-20,14,OVERDUE",
-        "LN2002,Priya Singh,9876543211,560001,80000,20000,2026-10-15,19,OVERDUE",
-        "LN2003,Amit Kumar,9876543212,560002,120000,25000,2026-10-10,24,OVERDUE"
+        "LN3001,Rahul Sharma,9876543210,560001,100000,15000,2026-10-20,14,OVERDUE",
+        "LN3002,Priya Singh,9876543211,560001,80000,20000,2026-10-15,19,OVERDUE",
+        "LN3003,Amit Kumar,9876543212,560002,120000,25000,2026-10-10,24,OVERDUE"
     ].join("\n");
 
     const blob = new Blob([csvContent], {
@@ -25,6 +25,7 @@ const downloadSampleCSV = () => {
 
     link.href = url;
     link.download = "collectsmart_sample_loans.csv";
+
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -32,7 +33,7 @@ const downloadSampleCSV = () => {
     window.URL.revokeObjectURL(url);
 };
 
-// Handle CSV file selection
+// Handle CSV selection
 const handleFileChange = (e) => {
     const selectedFile = e.target.files?.[0];
 
@@ -47,6 +48,13 @@ const handleFileChange = (e) => {
     if (!selectedFile.name.toLowerCase().endsWith(".csv")) {
         setFile(null);
         setError("Only CSV files are allowed.");
+        e.target.value = "";
+        return;
+    }
+
+    if (selectedFile.size === 0) {
+        setFile(null);
+        setError("The selected CSV file is empty.");
         e.target.value = "";
         return;
     }
@@ -80,26 +88,58 @@ const handleUpload = async (e) => {
     try {
         const response = await API.post(
             "/csv/upload",
-            formData
+            formData,
+            {
+                headers: {
+                    // Prevent the shared Axios JSON header.
+                    // The browser will set multipart/form-data
+                    // with the correct boundary automatically.
+                    "Content-Type": undefined
+                }
+            }
         );
 
         setResult(response.data);
         setFile(null);
+
         e.target.reset();
 
     } catch (err) {
-        setError(
-            err.response?.data?.message ||
-            err.response?.data?.error ||
-            "CSV upload failed. Please check the file and try again."
-        );
+        console.error("CSV upload error:", err);
+
+        const status = err.response?.status;
+
+        if (status === 401) {
+            setError("Your session has expired. Please log in again.");
+        } else if (status === 403) {
+            setError("You do not have permission to import CSV files.");
+        } else if (status === 400) {
+            setError(
+                err.response?.data?.message ||
+                err.response?.data?.error ||
+                "Invalid CSV file. Please check the CSV format."
+            );
+        } else if (status === 413) {
+            setError("The uploaded file is too large.");
+        } else if (status === 415) {
+            setError(
+                "Unsupported file format. Please upload a valid CSV file."
+            );
+        } else {
+            setError(
+                err.response?.data?.message ||
+                err.response?.data?.error ||
+                "CSV upload failed. Please check the backend connection."
+            );
+        }
+
     } finally {
         setLoading(false);
     }
 };
 
 return (
-    <div className="p-6 max-w-5xl">
+    <div className="p-6 max-w-5xl mx-auto">
 
         {/* Page Header */}
         <div className="mb-6">
@@ -116,7 +156,7 @@ return (
         {/* Upload Section */}
         <div className="bg-white p-6 rounded-2xl shadow-sm">
 
-            <div className="border-2 border-dashed border-blue-300 rounded-xl p-10 text-center">
+            <div className="border-2 border-dashed border-blue-300 rounded-xl p-8 text-center">
 
                 <div className="text-5xl mb-4">
                     📁
@@ -150,7 +190,7 @@ return (
                     <button
                         type="submit"
                         disabled={loading || !file}
-                        className="bg-blue-600 text-white px-8 py-3 rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                        className="bg-blue-600 text-white px-8 py-3 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         {loading ? "Uploading..." : "Upload CSV"}
                     </button>
@@ -161,7 +201,7 @@ return (
 
             {/* Error Message */}
             {error && (
-                <div className="mt-5 p-4 bg-red-50 text-red-700 rounded-lg">
+                <div className="mt-5 p-4 bg-red-50 border border-red-200 text-red-700 rounded-lg">
                     ⚠️ {error}
                 </div>
             )}
@@ -206,8 +246,10 @@ return (
 
                     </div>
 
+                    {/* Import Errors */}
                     {result.errors?.length > 0 && (
                         <div className="mt-4 bg-red-50 p-4 rounded-lg text-red-700">
+
                             <p className="font-semibold mb-2">
                                 Import Errors:
                             </p>
@@ -217,6 +259,7 @@ return (
                                     {item}
                                 </p>
                             ))}
+
                         </div>
                     )}
 
@@ -225,7 +268,7 @@ return (
 
         </div>
 
-        {/* CSV Format Section */}
+        {/* CSV Format Requirements */}
         <div className="bg-blue-50 p-5 rounded-xl mt-6">
 
             <h3 className="font-bold text-blue-900 mb-2">
@@ -251,7 +294,7 @@ return (
                 </button>
             </div>
 
-            <div className="mt-4 text-sm text-blue-800">
+            <div className="mt-4 text-sm text-blue-800 space-y-1">
                 <p>• Only CSV files are supported.</p>
                 <p>• Maximum file size: 5 MB.</p>
                 <p>• Duplicate loan account numbers are skipped by the backend.</p>

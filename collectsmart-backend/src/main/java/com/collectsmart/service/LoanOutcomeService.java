@@ -12,78 +12,110 @@ import java.util.List;
 @Service
 public class LoanOutcomeService {
 
-    private final LoanOutcomeRepository outcomeRepository;
-    private final LoanRepository loanRepository;
-    private final ContactTimeService contactTimeService;
+private final LoanOutcomeRepository outcomeRepository;
+private final LoanRepository loanRepository;
+private final ContactTimeService contactTimeService;
 
-    public LoanOutcomeService(
-            LoanOutcomeRepository outcomeRepository,
-            LoanRepository loanRepository,
-            ContactTimeService contactTimeService) {
+public LoanOutcomeService(
+        LoanOutcomeRepository outcomeRepository,
+        LoanRepository loanRepository,
+        ContactTimeService contactTimeService) {
 
-        this.outcomeRepository = outcomeRepository;
-        this.loanRepository = loanRepository;
-        this.contactTimeService = contactTimeService;
+    this.outcomeRepository = outcomeRepository;
+    this.loanRepository = loanRepository;
+    this.contactTimeService = contactTimeService;
+}
+
+// Save outcome for an authenticated field officer
+public LoanOutcome saveOutcome(
+        Long loanId,
+        Long officerId,
+        String outcomeType,
+        Double latitude,
+        Double longitude,
+        String notes) {
+
+    List<String> validOutcomes = List.of(
+            "PAID",
+            "PROMISE_TO_PAY",
+            "NOT_REACHABLE",
+            "DISPUTE"
+    );
+
+    if (outcomeType == null
+            || !validOutcomes.contains(outcomeType.toUpperCase())) {
+
+        throw new RuntimeException("Invalid outcome type");
     }
 
-    // Save loan outcome
-    public LoanOutcome saveOutcome(
-            Long loanId,
-            Long officerId,
-            String outcomeType,
-            Double latitude,
-            Double longitude,
-            String notes) {
+    if (officerId == null) {
+        throw new RuntimeException("Invalid field officer account");
+    }
 
-        List<String> validOutcomes = List.of(
-                "PAID",
-                "PROMISE_TO_PAY",
-                "NOT_REACHABLE",
-                "DISPUTE"
+    Loan loan = loanRepository.findById(loanId)
+            .orElseThrow(() ->
+                    new RuntimeException("Loan not found"));
+
+    // Verify that the authenticated officer owns this loan
+    if (loan.getAssignedOfficerId() == null
+            || !loan.getAssignedOfficerId().equals(officerId)) {
+
+        throw new RuntimeException(
+                "This loan is not assigned to your account"
         );
+    }
 
-        if (outcomeType == null ||
-                !validOutcomes.contains(outcomeType.toUpperCase())) {
-            throw new RuntimeException("Invalid outcome type");
-        }
+    // Enforce permitted contact hours and record attempt
+    contactTimeService.validateAndRecord(loan, officerId);
 
-        Loan loan = loanRepository.findById(loanId)
-                .orElseThrow(() ->
-                        new RuntimeException("Loan not found"));
+    LoanOutcome outcome = new LoanOutcome();
 
-        if (loan.getAssignedOfficerId() == null ||
-                !loan.getAssignedOfficerId().equals(officerId)) {
+    outcome.setLoan(loan);
+    outcome.setFieldOfficerId(officerId);
+    outcome.setOutcomeType(outcomeType.toUpperCase());
+    outcome.setLatitude(latitude);
+    outcome.setLongitude(longitude);
+    outcome.setNotes(notes);
+
+    return outcomeRepository.save(outcome);
+}
+
+// Get outcomes for a loan with ownership validation
+public List<LoanOutcome> getOutcomesByLoan(
+        Long loanId,
+        String role,
+        Long officerId) {
+
+    Loan loan = loanRepository.findById(loanId)
+            .orElseThrow(() ->
+                    new RuntimeException("Loan not found"));
+
+    if ("FIELD_OFFICER".equals(role)) {
+
+        if (officerId == null
+                || loan.getAssignedOfficerId() == null
+                || !loan.getAssignedOfficerId().equals(officerId)) {
+
             throw new RuntimeException(
-                    "This loan is not assigned to this officer");
+                    "You cannot view outcomes for another officer's loan"
+            );
         }
 
-        // Check permitted contact hours
-contactTimeService.validateAndRecord(loan, officerId);
-        LoanOutcome outcome = new LoanOutcome();
-
-        outcome.setLoan(loan);
-        outcome.setFieldOfficerId(officerId);
-        outcome.setOutcomeType(outcomeType.toUpperCase());
-        outcome.setLatitude(latitude);
-        outcome.setLongitude(longitude);
-        outcome.setNotes(notes);
-
-        return outcomeRepository.save(outcome);
+    } else if (!"MANAGER".equals(role)) {
+        throw new RuntimeException("Access denied");
     }
 
-    // Get outcomes for a loan
-    public List<LoanOutcome> getOutcomesByLoan(Long loanId) {
+    return outcomeRepository.findByLoanId(loanId);
+}
 
-        if (!loanRepository.existsById(loanId)) {
-            throw new RuntimeException("Loan not found");
-        }
+// Get outcomes by officer
+public List<LoanOutcome> getOutcomesByOfficer(Long officerId) {
 
-        return outcomeRepository.findByLoanId(loanId);
+    if (officerId == null) {
+        throw new RuntimeException("Invalid officer ID");
     }
 
-    // Get outcomes by officer
-    public List<LoanOutcome> getOutcomesByOfficer(Long officerId) {
+    return outcomeRepository.findByFieldOfficerId(officerId);
+}
 
-        return outcomeRepository.findByFieldOfficerId(officerId);
-    }
 }

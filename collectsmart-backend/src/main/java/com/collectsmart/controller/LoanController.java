@@ -1,14 +1,19 @@
 package com.collectsmart.controller;
 
+import com.collectsmart.config.AuthenticatedUser;
 import com.collectsmart.entity.Loan;
 import com.collectsmart.repository.LoanRepository;
 import com.collectsmart.service.LoanPriorityService;
 import com.collectsmart.service.LoanAssignmentService;
+
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/loans")
@@ -19,100 +24,102 @@ public class LoanController {
     private final LoanPriorityService loanPriorityService;
     private final LoanAssignmentService loanAssignmentService;
 
-    // Constructor injection
-   public LoanController(
-        LoanRepository loanRepository,
-        LoanPriorityService loanPriorityService,
-        LoanAssignmentService loanAssignmentService) {
+    public LoanController(
+            LoanRepository loanRepository,
+            LoanPriorityService loanPriorityService,
+            LoanAssignmentService loanAssignmentService) {
 
-    this.loanRepository = loanRepository;
-    this.loanPriorityService = loanPriorityService;
-    this.loanAssignmentService = loanAssignmentService;
-}
-
-    // 1. Get all loans
-    @GetMapping
-    public ResponseEntity<List<Loan>> getAllLoans() {
-
-        List<Loan> loans = loanRepository.findAll();
-
-        return ResponseEntity.ok(loans);
+        this.loanRepository = loanRepository;
+        this.loanPriorityService = loanPriorityService;
+        this.loanAssignmentService = loanAssignmentService;
     }
 
-    // 2. Get loan by ID
-    @GetMapping("/{id}")
-    public ResponseEntity<Loan> getLoanById(@PathVariable Long id) {
+    // Manager: Get all loans
+    @GetMapping
+    @PreAuthorize("hasRole('MANAGER')")
+    public ResponseEntity<List<Loan>> getAllLoans() {
+        return ResponseEntity.ok(loanRepository.findAll());
+    }
 
+    // Manager: Get loan by ID
+    @GetMapping("/{id}")
+    @PreAuthorize("hasRole('MANAGER')")
+    public ResponseEntity<Loan> getLoanById(@PathVariable Long id) {
         return loanRepository.findById(id)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }
 
-    // 3. Create a new loan
+    // Manager: Create loan
     @PostMapping
-    public ResponseEntity<Loan> createLoan(@RequestBody Loan loan) {
+    @PreAuthorize("hasRole('MANAGER')")
+    public ResponseEntity<?> createLoan(@RequestBody Loan loan) {
 
         if (loanRepository.existsByLoanAccountNumber(
                 loan.getLoanAccountNumber())) {
-
-            return ResponseEntity.status(HttpStatus.CONFLICT).build();
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(Map.of("message", "Loan account already exists."));
         }
 
         Loan savedLoan = loanRepository.save(loan);
 
-        return ResponseEntity
-                .status(HttpStatus.CREATED)
-                .body(savedLoan);
+        return ResponseEntity.status(HttpStatus.CREATED).body(savedLoan);
     }
 
-    // 4. Get all overdue loans
+    // Manager: Get overdue loans
     @GetMapping("/overdue")
+    @PreAuthorize("hasRole('MANAGER')")
     public ResponseEntity<List<Loan>> getOverdueLoans() {
-
-        List<Loan> loans = loanRepository.findByStatus("OVERDUE");
-
-        return ResponseEntity.ok(loans);
+        return ResponseEntity.ok(loanRepository.findByStatus("OVERDUE"));
     }
 
-    // 5. Get loans assigned to a field officer
+    // Manager or the officer viewing their own loans
     @GetMapping("/officer/{officerId}")
-    public ResponseEntity<List<Loan>> getLoansByOfficer(
-            @PathVariable Long officerId) {
+    @PreAuthorize("hasAnyRole('MANAGER', 'FIELD_OFFICER')")
+    public ResponseEntity<?> getLoansByOfficer(
+            @PathVariable Long officerId,
+            @AuthenticationPrincipal AuthenticatedUser user) {
 
-        List<Loan> loans =
-                loanRepository.findByAssignedOfficerId(officerId);
+        if ("FIELD_OFFICER".equals(user.role())) {
+            if (user.fieldOfficerId() == null ||
+                    !user.fieldOfficerId().equals(officerId)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of("message",
+                                "You cannot view another officer's loans."));
+            }
+        }
 
-        return ResponseEntity.ok(loans);
+        return ResponseEntity.ok(
+                loanRepository.findByAssignedOfficerId(officerId));
     }
 
-    // 6. Get loans by pincode
+    // Manager: Filter by pincode
     @GetMapping("/pincode/{pincode}")
+    @PreAuthorize("hasRole('MANAGER')")
     public ResponseEntity<List<Loan>> getLoansByPincode(
             @PathVariable String pincode) {
 
-        List<Loan> loans = loanRepository.findByPincode(pincode);
-
-        return ResponseEntity.ok(loans);
+        return ResponseEntity.ok(loanRepository.findByPincode(pincode));
     }
 
-    // 7. Calculate AI priority score for a loan
+    // Manager: Calculate individual priority
     @PostMapping("/{id}/calculate-priority")
-    public ResponseEntity<Loan> calculatePriority(
-            @PathVariable Long id) {
+    @PreAuthorize("hasRole('MANAGER')")
+    public ResponseEntity<?> calculatePriority(@PathVariable Long id) {
 
         try {
-            Loan loan = loanPriorityService.calculatePriority(id);
-
-            return ResponseEntity.ok(loan);
+            return ResponseEntity.ok(
+                    loanPriorityService.calculatePriority(id));
 
         } catch (RuntimeException exception) {
-
-            return ResponseEntity.notFound().build();
+            return ResponseEntity.badRequest()
+                    .body(Map.of("message", exception.getMessage()));
         }
     }
 
-    // 8. Calculate priority for all overdue loans
+    // Manager: Calculate all priorities
     @PostMapping("/calculate-all-priorities")
+    @PreAuthorize("hasRole('MANAGER')")
     public ResponseEntity<List<Loan>> calculateAllPriorities() {
 
         List<Loan> overdueLoans =
@@ -126,17 +133,23 @@ public class LoanController {
         return ResponseEntity.ok(updatedLoans);
     }
 
-    // Automatically assign loan to a field officer
-@PostMapping("/{id}/assign")
-public ResponseEntity<?> assignLoan(@PathVariable Long id) {
+    // Manager: Automatically assign loan
+    @PostMapping("/{id}/assign")
+    @PreAuthorize("hasRole('MANAGER')")
+    public ResponseEntity<?> assignLoan(@PathVariable Long id) {
 
-    try {
-        Loan loan = loanAssignmentService.assignLoan(id);
-        return ResponseEntity.ok(loan);
+        try {
+            Loan loan = loanAssignmentService.assignLoan(id);
+            return ResponseEntity.ok(loan);
 
-    } catch (RuntimeException exception) {
-        return ResponseEntity.badRequest()
-                .body(exception.getMessage());
+        } catch (RuntimeException exception) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of(
+                            "message",
+                            exception.getMessage() != null
+                                    ? exception.getMessage()
+                                    : "Unable to assign loan."
+                    ));
+        }
     }
-  }
 }

@@ -69,3 +69,9 @@ desktop.ini
 *.tmp
 *.swp
 *.bak
+
+# Local startup script containing credentials
+run-backend.ps1
+
+# Local configuration
+application-local.properties

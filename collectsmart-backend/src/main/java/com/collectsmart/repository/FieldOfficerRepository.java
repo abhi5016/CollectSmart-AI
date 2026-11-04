@@ -2,17 +2,14 @@ package com.collectsmart.repository;
 
 import com.collectsmart.entity.FieldOfficer;
 import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.stereotype.Repository;
-
 import java.util.List;
 
-@Repository
 public interface FieldOfficerRepository
         extends JpaRepository<FieldOfficer, Long> {
 
-    List<FieldOfficer> findByPincodeAndActiveTrue(String pincode);
+    boolean existsByPhoneNumber(String phoneNumber);
 
     List<FieldOfficer> findByActiveTrue();
 
-    boolean existsByPhoneNumber(String phoneNumber);
+    List<FieldOfficer> findByPincodeAndActiveTrue(String pincode);
 }

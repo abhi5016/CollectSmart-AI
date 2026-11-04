@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import API from "../services/api";
+import { useAuth } from "../context/AuthContext";
 
 const STORAGE_KEY = "collectsmart_pending_outcomes";
 
@@ -16,8 +17,11 @@ localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
 }
 
 function OutcomeLogging() {
+const { user } = useAuth();
+
+const officerId = Number(user?.fieldOfficerId);
+
 const [loanId, setLoanId] = useState("");
-const [officerId, setOfficerId] = useState("2");
 const [outcomeType, setOutcomeType] = useState("PAID");
 const [notes, setNotes] = useState("");
 
@@ -32,7 +36,7 @@ const updatePendingCount = () => {
     setPendingCount(getPendingOutcomes().length);
 };
 
-// Get GPS coordinates when available
+// Get GPS coordinates
 const getLocation = () => {
     return new Promise((resolve) => {
         if (!navigator.geolocation) {
@@ -55,7 +59,7 @@ const getLocation = () => {
     });
 };
 
-// Save outcome locally
+// Save outcome locally when offline
 const saveOffline = (record) => {
     const pending = getPendingOutcomes();
 
@@ -68,7 +72,9 @@ const saveOffline = (record) => {
     savePendingOutcomes(pending);
     updatePendingCount();
 
-    setMessage("Internet unavailable. Outcome saved locally and waiting for sync.");
+    setMessage(
+        "Internet unavailable. Outcome saved locally and waiting for sync."
+    );
 };
 
 // Synchronize pending outcomes
@@ -84,10 +90,15 @@ const syncPendingOutcomes = useCallback(async () => {
 
     for (const record of pending) {
         try {
-            const { localId, createdAt, ...payload } = record;
+            const {
+                localId,
+                createdAt,
+                loanId: recordLoanId,
+                ...payload
+            } = record;
 
             await API.post(
-                `/outcomes/loan/${record.loanId}`,
+                `/outcomes/loan/${recordLoanId}`,
                 payload
             );
 
@@ -99,17 +110,8 @@ const syncPendingOutcomes = useCallback(async () => {
             savePendingOutcomes(remaining);
 
         } catch (error) {
-            // Keep failed records for another synchronization attempt.
-            if (error.response?.status >= 400 &&
-                error.response?.status < 500) {
-                console.error(
-                    "Outcome needs correction:",
-                    record.localId,
-                    error.response.data
-                );
-            }
+            console.error("Outcome synchronization failed:", error);
 
-            // Stop retrying immediately if the network is unavailable.
             if (!navigator.onLine) break;
         }
     }
@@ -118,7 +120,9 @@ const syncPendingOutcomes = useCallback(async () => {
 
     if (synced > 0) {
         setSyncedCount((previous) => previous + synced);
-        setMessage(`${synced} offline outcome(s) synchronized successfully.`);
+        setMessage(
+            `${synced} offline outcome(s) synchronized successfully.`
+        );
     }
 }, []);
 
@@ -152,6 +156,11 @@ const handleSubmit = async (e) => {
     e.preventDefault();
     setMessage("");
 
+    if (!officerId || Number.isNaN(officerId)) {
+        setMessage("Your account is not linked to a field officer.");
+        return;
+    }
+
     if (!loanId || Number(loanId) <= 0) {
         setMessage("Please enter a valid Loan ID.");
         return;
@@ -164,7 +173,6 @@ const handleSubmit = async (e) => {
 
         const record = {
             loanId: Number(loanId),
-            officerId: Number(officerId),
             outcomeType,
             latitude: location.latitude,
             longitude: location.longitude,
@@ -178,7 +186,6 @@ const handleSubmit = async (e) => {
                 await API.post(
                     `/outcomes/loan/${loanId}`,
                     {
-                        officerId: record.officerId,
                         outcomeType: record.outcomeType,
                         latitude: record.latitude,
                         longitude: record.longitude,
@@ -205,7 +212,7 @@ const handleSubmit = async (e) => {
         setMessage(
             error.response?.data?.message ||
             error.response?.data?.error ||
-            "Unable to record outcome. Please verify the loan and officer."
+            "Unable to record outcome. Please verify the loan assignment."
         );
     } finally {
         setLoading(false);
@@ -272,6 +279,21 @@ return (
             className="bg-white rounded-xl shadow p-6 max-w-xl space-y-4"
         >
 
+            {/* Logged-in Officer */}
+            <div>
+                <label className="block font-semibold mb-1">
+                    Logged-in Field Officer
+                </label>
+
+                <input
+                    type="text"
+                    value={`${user?.email || ""} (Officer ID: ${user?.fieldOfficerId ?? "Not linked"})`}
+                    readOnly
+                    className="w-full border rounded-lg p-3 bg-gray-100"
+                />
+            </div>
+
+            {/* Loan ID */}
             <div>
                 <label className="block font-semibold mb-1">
                     Loan ID
@@ -282,27 +304,13 @@ return (
                     min="1"
                     value={loanId}
                     onChange={(e) => setLoanId(e.target.value)}
-                    placeholder="Enter Loan ID"
+                    placeholder="Enter numeric Loan ID"
                     className="w-full border rounded-lg p-3"
                     required
                 />
             </div>
 
-            <div>
-                <label className="block font-semibold mb-1">
-                    Officer ID
-                </label>
-
-                <select
-                    value={officerId}
-                    onChange={(e) => setOfficerId(e.target.value)}
-                    className="w-full border rounded-lg p-3"
-                >
-                    <option value="1">Officer 1</option>
-                    <option value="2">Officer 2</option>
-                </select>
-            </div>
-
+            {/* Outcome */}
             <div>
                 <label className="block font-semibold mb-1">
                     Outcome
@@ -320,6 +328,7 @@ return (
                 </select>
             </div>
 
+            {/* Notes */}
             <div>
                 <label className="block font-semibold mb-1">
                     Notes
@@ -336,7 +345,7 @@ return (
 
             <button
                 type="submit"
-                disabled={loading}
+                disabled={loading || !officerId}
                 className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 disabled:opacity-50"
             >
                 {loading ? "Saving..." : "Submit Outcome"}

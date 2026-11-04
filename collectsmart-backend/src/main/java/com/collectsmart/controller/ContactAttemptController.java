@@ -1,12 +1,16 @@
 package com.collectsmart.controller;
 
+import com.collectsmart.config.AuthenticatedUser;
 import com.collectsmart.entity.ContactAttempt;
 import com.collectsmart.entity.Loan;
 import com.collectsmart.repository.ContactAttemptRepository;
 import com.collectsmart.repository.LoanRepository;
 import com.collectsmart.service.ContactTimeService;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -17,104 +21,148 @@ import java.util.Map;
 @CrossOrigin(origins = "*")
 public class ContactAttemptController {
 
-    private final ContactAttemptRepository attemptRepository;
-    private final LoanRepository loanRepository;
-    private final ContactTimeService contactTimeService;
+private final ContactAttemptRepository attemptRepository;
+private final LoanRepository loanRepository;
+private final ContactTimeService contactTimeService;
 
-    public ContactAttemptController(
-            ContactAttemptRepository attemptRepository,
-            LoanRepository loanRepository,
-            ContactTimeService contactTimeService) {
+public ContactAttemptController(
+        ContactAttemptRepository attemptRepository,
+        LoanRepository loanRepository,
+        ContactTimeService contactTimeService) {
 
-        this.attemptRepository = attemptRepository;
-        this.loanRepository = loanRepository;
-        this.contactTimeService = contactTimeService;
-    }
+    this.attemptRepository = attemptRepository;
+    this.loanRepository = loanRepository;
+    this.contactTimeService = contactTimeService;
+}
 
-    // Authorize contact and record the attempt
-    @PostMapping("/authorize")
-    public ResponseEntity<?> authorizeContact(
-            @RequestBody ContactRequest request) {
+// Authorize contact using authenticated officer identity
+@PostMapping("/authorize")
+@PreAuthorize("hasRole('FIELD_OFFICER')")
+public ResponseEntity<?> authorizeContact(
+        @RequestBody ContactRequest request,
+        @AuthenticationPrincipal AuthenticatedUser user) {
 
-        try {
-            Loan loan = loanRepository.findById(request.loanId())
-                    .orElseThrow(() ->
-                            new RuntimeException("Loan not found"));
-
-            if (loan.getAssignedOfficerId() == null ||
-                    !loan.getAssignedOfficerId()
-                            .equals(request.officerId())) {
-
-                return ResponseEntity.badRequest().body(
-                        Map.of("message",
-                                "Loan is not assigned to this officer")
-                );
-            }
-
-            contactTimeService.validateAndRecord(
-                    loan,
-                    request.officerId()
-            );
-
-            return ResponseEntity.ok(
-                    Map.of(
-                            "allowed", true,
-                            "message", "Contact is allowed. You may proceed with the call."
-                    )
-            );
-
-        } catch (RuntimeException e) {
-
-            boolean blocked = e.getMessage() != null &&
-                    e.getMessage().contains("8 AM");
-
-            return ResponseEntity
-                    .status(blocked ? 403 : 400)
+    try {
+        if (user == null || user.fieldOfficerId() == null) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
                     .body(Map.of(
                             "allowed", false,
-                            "message", e.getMessage()
+                            "message", "Your account is not linked to a field officer."
                     ));
         }
-    }
 
-    public record ContactRequest(
-            Long loanId,
-            Long officerId
-    ) {}
+        Long authenticatedOfficerId = user.fieldOfficerId();
 
-    // Get all attempts
-    @GetMapping
-    public ResponseEntity<List<ContactAttempt>> getAllAttempts() {
-        return ResponseEntity.ok(attemptRepository.findAll());
-    }
+        Loan loan = loanRepository.findById(request.loanId())
+                .orElseThrow(() ->
+                        new RuntimeException("Loan not found"));
 
-    // Get attempts by loan
-    @GetMapping("/loan/{loanId}")
-    public ResponseEntity<List<ContactAttempt>> getByLoan(
-            @PathVariable Long loanId) {
+        if (loan.getAssignedOfficerId() == null
+                || !loan.getAssignedOfficerId().equals(authenticatedOfficerId)) {
+
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of(
+                            "allowed", false,
+                            "message", "You are not authorized to contact this borrower."
+                    ));
+        }
+
+        contactTimeService.validateAndRecord(
+                loan,
+                authenticatedOfficerId
+        );
 
         return ResponseEntity.ok(
-                attemptRepository.findByLoanIdOrderByAttemptedAtDesc(
-                        loanId)
+                Map.of(
+                        "allowed", true,
+                        "message", "Contact is allowed. You may proceed with the call."
+                )
         );
+
+    } catch (RuntimeException exception) {
+
+        String errorMessage = exception.getMessage() != null
+                ? exception.getMessage()
+                : "Unable to authorize contact.";
+
+        boolean blocked = errorMessage.contains("8 AM");
+
+        return ResponseEntity
+                .status(blocked ? HttpStatus.FORBIDDEN : HttpStatus.BAD_REQUEST)
+                .body(Map.of(
+                        "allowed", false,
+                        "message", errorMessage
+                ));
+    }
+}
+
+// Keep officerId in the request for frontend compatibility.
+// The backend deliberately ignores it and uses the JWT identity.
+public record ContactRequest(
+        Long loanId,
+        Long officerId
+) {}
+
+// Manager-only: get all contact attempts
+@GetMapping
+@PreAuthorize("hasRole('MANAGER')")
+public ResponseEntity<List<ContactAttempt>> getAllAttempts() {
+    return ResponseEntity.ok(attemptRepository.findAll());
+}
+
+// Manager can view any loan attempts; officer can view their own.
+@GetMapping("/loan/{loanId}")
+@PreAuthorize("hasAnyRole('MANAGER', 'FIELD_OFFICER')")
+public ResponseEntity<?> getByLoan(
+        @PathVariable Long loanId,
+        @AuthenticationPrincipal AuthenticatedUser user) {
+
+    Loan loan = loanRepository.findById(loanId).orElse(null);
+
+    if (loan == null) {
+        return ResponseEntity.notFound().build();
     }
 
-    // Get attempts by officer
-    @GetMapping("/officer/{officerId}")
-    public ResponseEntity<List<ContactAttempt>> getByOfficer(
-            @PathVariable Long officerId) {
+    if ("FIELD_OFFICER".equals(user.role())
+            && (user.fieldOfficerId() == null
+            || !user.fieldOfficerId().equals(loan.getAssignedOfficerId()))) {
 
-        return ResponseEntity.ok(
-                attemptRepository.findByOfficerIdOrderByAttemptedAtDesc(
-                        officerId)
-        );
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(Map.of("message", "You cannot view another officer's contact attempts."));
     }
 
-    // Get blocked attempts
-    @GetMapping("/blocked")
-    public ResponseEntity<List<ContactAttempt>> getBlockedAttempts() {
-        return ResponseEntity.ok(
-                attemptRepository.findByAttemptStatus("BLOCKED")
-        );
+    return ResponseEntity.ok(
+            attemptRepository.findByLoanIdOrderByAttemptedAtDesc(loanId)
+    );
+}
+
+// Manager can view any officer; field officer can view only their own.
+@GetMapping("/officer/{officerId}")
+@PreAuthorize("hasAnyRole('MANAGER', 'FIELD_OFFICER')")
+public ResponseEntity<?> getByOfficer(
+        @PathVariable Long officerId,
+        @AuthenticationPrincipal AuthenticatedUser user) {
+
+    if ("FIELD_OFFICER".equals(user.role())
+            && (user.fieldOfficerId() == null
+            || !user.fieldOfficerId().equals(officerId))) {
+
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(Map.of("message", "You cannot view another officer's contact attempts."));
     }
+
+    return ResponseEntity.ok(
+            attemptRepository.findByOfficerIdOrderByAttemptedAtDesc(officerId)
+    );
+}
+
+// Manager-only: view blocked attempts
+@GetMapping("/blocked")
+@PreAuthorize("hasRole('MANAGER')")
+public ResponseEntity<List<ContactAttempt>> getBlockedAttempts() {
+    return ResponseEntity.ok(
+            attemptRepository.findByAttemptStatus("BLOCKED")
+    );
+}
+
 }
